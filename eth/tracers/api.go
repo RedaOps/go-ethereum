@@ -805,6 +805,77 @@ func (api *API) TraceTransaction(ctx context.Context, hash common.Hash, config *
 	return api.traceTx(ctx, msg, txctx, vmctx, statedb, config)
 }
 
+func (api *API) TraceRawTransaction(ctx context.Context, input hexutil.Bytes, blockNrOrHash rpc.BlockNumberOrHash) (*types.Receipt, error) {
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalBinary(input); err != nil {
+		return nil, err
+	}
+	var (
+		err   error
+		block *types.Block
+	)
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		block, err = api.blockByHash(ctx, hash)
+	} else if number, ok := blockNrOrHash.Number(); ok {
+		if number == rpc.PendingBlockNumber {
+			// We don't have access to the miner here. For tracing 'future' transactions,
+			// it can be done with block- and state-overrides instead, which offers
+			// more flexibility and stability than trying to trace on 'pending', since
+			// the contents of 'pending' is unstable and probably not a true representation
+			// of what the next actual block is likely to contain.
+			return nil, errors.New("tracing on top of pending is not supported")
+		}
+		block, err = api.blockByNumber(ctx, number)
+	} else {
+		return nil, errors.New("invalid arguments; neither block nor hash specified")
+	}
+	if err != nil {
+		return nil, err
+	}
+	// try to recompute the state
+	reexec := defaultTraceReexec
+	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	if err != nil {
+		return nil, err
+	}
+	vmctx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
+	// Execute the trace
+	var signer = types.MakeSigner(api.backend.ChainConfig(), block.Number());
+	msg, err := tx.AsMessage(signer, block.BaseFee());
+	if err != nil {
+		return nil, err;
+	}
+	var txContext = core.NewEVMTxContext(msg);
+	var txctx = new(Context);
+
+	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: false})
+	// Call Prepare to clear out the statedb access list
+	statedb.Prepare(txctx.TxHash, txctx.TxIndex);
+	var msgResult, err2 = core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.Gas()));
+	if err2 != nil {
+		return nil, fmt.Errorf("tracing failed: %w", err2)
+	}
+	
+	// Build Receipt
+	var root []byte;
+	statedb.Finalise(true)
+
+	var receipt = &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: msgResult.UsedGas}
+	if msgResult.Failed() {
+		receipt.Status = types.ReceiptStatusFailed
+	} else {
+		receipt.Status = types.ReceiptStatusSuccessful
+	}
+	receipt.TxHash = tx.Hash()
+	receipt.GasUsed = msgResult.UsedGas
+	
+	// Set the receipt logs and create the bloom filter.
+	receipt.Logs = statedb.GetLogs(txctx.TxHash, block.Hash())
+	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+
+	return receipt, nil;
+}
+
 // TraceCall lets you trace a given eth_call. It collects the structured logs
 // created during the execution of EVM if the given transaction was added on
 // top of the provided block and returns them as a JSON object.
@@ -824,6 +895,9 @@ func (api *API) TraceCall(ctx context.Context, args ethapi.TransactionArgs, bloc
 			// the contents of 'pending' is unstable and probably not a true representation
 			// of what the next actual block is likely to contain.
 			return nil, errors.New("tracing on top of pending is not supported")
+		}
+		if number == 69 {
+			return nil, errors.New("Cannot trace on funny number")
 		}
 		block, err = api.blockByNumber(ctx, number)
 	} else {
