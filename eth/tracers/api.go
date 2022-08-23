@@ -876,6 +876,113 @@ func (api *API) TraceRawTransaction(ctx context.Context, input hexutil.Bytes, bl
 	return receipt, nil;
 }
 
+func (api *API) TraceVictimArbTransactions(ctx context.Context, victimTx hexutil.Bytes, arbTxes []hexutil.Bytes, blockNrOrHash rpc.BlockNumberOrHash) ([]*types.Receipt, error) {
+	vTx := new(types.Transaction)
+	if err := vTx.UnmarshalBinary(victimTx); err != nil {
+		return nil, err
+	}
+	var (
+		err   error
+		block *types.Block
+	)
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		block, err = api.blockByHash(ctx, hash)
+	} else if number, ok := blockNrOrHash.Number(); ok {
+		if number == rpc.PendingBlockNumber {
+			// We don't have access to the miner here. For tracing 'future' transactions,
+			// it can be done with block- and state-overrides instead, which offers
+			// more flexibility and stability than trying to trace on 'pending', since
+			// the contents of 'pending' is unstable and probably not a true representation
+			// of what the next actual block is likely to contain.
+			return nil, errors.New("tracing on top of pending is not supported")
+		}
+		block, err = api.blockByNumber(ctx, number)
+	} else {
+		return nil, errors.New("invalid arguments; neither block nor hash specified")
+	}
+	if err != nil {
+		return nil, err
+	}
+	// try to recompute the state
+	reexec := defaultTraceReexec
+	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	if err != nil {
+		return nil, err
+	}
+	vmctx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
+	// Execute the trace
+	var signer = types.MakeSigner(api.backend.ChainConfig(), block.Number());
+	victimMsg, err := vTx.AsMessage(signer, block.BaseFee());
+	if err != nil {
+		return nil, err;
+	}
+	var txContext = core.NewEVMTxContext(victimMsg);
+	var txctx = new(Context);
+
+	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: false})
+	// Call Prepare to clear out the statedb access list
+	statedb.Prepare(txctx.TxHash, txctx.TxIndex);
+	var msgResult, err2 = core.ApplyMessage(vmenv, victimMsg, new(core.GasPool).AddGas(victimMsg.Gas()));
+	if err2 != nil {
+		return nil, fmt.Errorf("tracing failed: %w", err2)
+	}
+
+	if msgResult.Failed() {
+		return nil, errors.New("Victim TX failed");
+	}
+
+	var vicLogsLength = len(statedb.GetLogs(txctx.TxHash, block.Hash()));
+	
+	var retData []*types.Receipt;
+
+	for _, s := range arbTxes {
+		tx := new(types.Transaction);
+		if err := tx.UnmarshalBinary(s); err != nil {
+			return nil, err
+		}
+
+		arbMsg, err2 := tx.AsMessage(signer, block.BaseFee());
+		if err2 != nil {
+			return nil, err;
+		}
+
+		statedbCopy := statedb.Copy();
+		var txContextCopy = core.NewEVMTxContext(arbMsg);
+		var txctxCopy = txctx;
+		var vmEnvCopy = vm.NewEVM(vmctx, txContextCopy, statedbCopy, api.backend.ChainConfig(), vm.Config{Debug: false});
+
+		statedbCopy.Prepare(txctxCopy.TxHash, txctxCopy.TxIndex);
+
+		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, new(core.GasPool).AddGas(arbMsg.Gas()));
+		if err3 != nil {
+			retData = append(retData, &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusFailed});
+			// return nil, fmt.Errorf("arb tx tracing failed: %w", err3)
+			continue;
+		}
+
+		// Build Receipt
+		var root []byte;
+		statedbCopy.Finalise(true)
+
+		var receipt = &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: txRes.UsedGas}
+		if txRes.Failed() {
+			receipt.Status = types.ReceiptStatusFailed
+		} else {
+			receipt.Status = types.ReceiptStatusSuccessful
+		}
+		receipt.TxHash = tx.Hash()
+		receipt.GasUsed = txRes.UsedGas
+		
+		// Set the receipt logs and create the bloom filter.
+		receipt.Logs = statedbCopy.GetLogs(txctxCopy.TxHash, block.Hash())[vicLogsLength:];
+		receipt.Bloom = types.CreateBloom(types.Receipts{receipt});
+
+		retData = append(retData, receipt);
+	}
+
+	return retData, nil;
+}
+
 // TraceCall lets you trace a given eth_call. It collects the structured logs
 // created during the execution of EVM if the given transaction was added on
 // top of the provided block and returns them as a JSON object.
