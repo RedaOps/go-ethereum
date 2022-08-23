@@ -955,8 +955,13 @@ func (api *API) TraceVictimArbTransactions(ctx context.Context, victimTx hexutil
 
 		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, new(core.GasPool).AddGas(arbMsg.Gas()));
 		if err3 != nil {
-			retData = append(retData, &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusFailed});
+			retData = append(retData, &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusFailed, PostState: []byte(err3.Error())});
 			// return nil, fmt.Errorf("arb tx tracing failed: %w", err3)
+			continue;
+		}
+
+		if txRes.Failed() {
+			retData = append(retData, &types.Receipt{TxHash: tx.Hash(), Status: types.ReceiptStatusFailed, PostState: append([]byte(txRes.Unwrap().Error()), txRes.ReturnData...)});
 			continue;
 		}
 
