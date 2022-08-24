@@ -922,7 +922,7 @@ func (api *API) TraceVictimArbTransactions(ctx context.Context, victimTx hexutil
 	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: false})
 	// Call Prepare to clear out the statedb access list
 	statedb.Prepare(txctx.TxHash, txctx.TxIndex);
-	var msgResult, err2 = core.ApplyMessage(vmenv, victimMsg, new(core.GasPool).AddGas(victimMsg.Gas()));
+	var msgResult, err2 = core.ApplyMessageNoNonceCheck(vmenv, victimMsg, new(core.GasPool).AddGas(victimMsg.Gas()));
 	if err2 != nil {
 		return nil, fmt.Errorf("tracing failed: %w", err2)
 	}
