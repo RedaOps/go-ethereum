@@ -1066,6 +1066,7 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, new(core.GasPool).AddGas(arbMsg.Gas()));
 		if err3 != nil {
 			retData = append(retData, &core.ExecutionResult{Err: err3});
+			continue;
 		}
 
 		retData = append(retData, txRes);
