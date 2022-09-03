@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/common/math"
 )
 
 const (
@@ -1029,12 +1030,13 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 		return nil, err;
 	}
 	var txContext = core.NewEVMTxContext(victimMsg);
-	var txctx = new(Context);
 
-	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: false})
+	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{});
+	gp := new(core.GasPool).AddGas(math.MaxUint64);
 	// Call Prepare to clear out the statedb access list
-	statedb.Prepare(txctx.TxHash, txctx.TxIndex);
-	var msgResult, err2 = core.ApplyMessageNoNonceCheck(vmenv, victimMsg, new(core.GasPool).AddGas(victimMsg.Gas()));
+	statedb.Prepare(vTx.Hash(), 0);
+	var msgResult, err2 = core.ApplyMessageNoNonceCheck(vmenv, victimMsg, gp);
+	statedb.Finalise(true);
 	if err2 != nil {
 		return nil, fmt.Errorf("tracing failed: %w", err2)
 	}
@@ -1057,13 +1059,14 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 		}
 
 		statedbCopy := statedb.Copy();
+		gpCopy := gp;
 		var txContextCopy = core.NewEVMTxContext(arbMsg);
-		var txctxCopy = txctx;
-		var vmEnvCopy = vm.NewEVM(vmctx, txContextCopy, statedbCopy, api.backend.ChainConfig(), vm.Config{Debug: false});
+		var vmEnvCopy = vm.NewEVM(vmctx, txContextCopy, statedbCopy, api.backend.ChainConfig(), vm.Config{});
 
-		statedbCopy.Prepare(txctxCopy.TxHash, txctxCopy.TxIndex);
+		statedbCopy.Prepare(tx.Hash(), 1);
 
-		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, new(core.GasPool).AddGas(arbMsg.Gas()));
+		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, gpCopy);
+		statedbCopy.Finalise(true);
 		if err3 != nil {
 			retData = append(retData, &core.ExecutionResult{Err: err3});
 			continue;
