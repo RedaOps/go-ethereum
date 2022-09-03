@@ -43,6 +43,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/common/math"
 )
 
 const (
@@ -1029,12 +1030,13 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 		return nil, err;
 	}
 	var txContext = core.NewEVMTxContext(victimMsg);
-	var txctx = new(Context);
 
-	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{Debug: false})
+	gp := new(core.GasPool).AddGas(math.MaxUint64);
+	vmenv := vm.NewEVM(vmctx, txContext, statedb, api.backend.ChainConfig(), vm.Config{});
 	// Call Prepare to clear out the statedb access list
-	statedb.Prepare(txctx.TxHash, txctx.TxIndex);
-	var msgResult, err2 = core.ApplyMessageNoNonceCheck(vmenv, victimMsg, new(core.GasPool).AddGas(victimMsg.Gas()));
+	statedb.Prepare(vTx.Hash(), 0);
+	var msgResult, err2 = core.ApplyMessageNoNonceCheck(vmenv, victimMsg, gp);
+	statedb.Finalise(true);
 	if err2 != nil {
 		return nil, fmt.Errorf("tracing failed: %w", err2)
 	}
@@ -1045,7 +1047,7 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 	
 	var retData []*core.ExecutionResult;
 
-	for _, s := range arbTxes {
+	for i, s := range arbTxes {
 		tx := new(types.Transaction);
 		if err := tx.UnmarshalBinary(s); err != nil {
 			return nil, err
@@ -1056,14 +1058,13 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 			return nil, err;
 		}
 
-		statedbCopy := statedb.Copy();
 		var txContextCopy = core.NewEVMTxContext(arbMsg);
-		var txctxCopy = txctx;
-		var vmEnvCopy = vm.NewEVM(vmctx, txContextCopy, statedbCopy, api.backend.ChainConfig(), vm.Config{Debug: false});
+		vmenv.Reset(txContextCopy, statedb);
 
-		statedbCopy.Prepare(txctxCopy.TxHash, txctxCopy.TxIndex);
+		statedb.Prepare(tx.Hash(), i+1);
 
-		var txRes, err3 = core.ApplyMessage(vmEnvCopy, arbMsg, new(core.GasPool).AddGas(arbMsg.Gas()));
+		var txRes, err3 = core.ApplyMessage(vmenv, arbMsg, gp);
+		statedb.Finalise(true);
 		if err3 != nil {
 			retData = append(retData, &core.ExecutionResult{Err: err3});
 			continue;
