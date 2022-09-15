@@ -871,10 +871,11 @@ func (api *API) TraceRawTransaction(ctx context.Context, input hexutil.Bytes, bl
 	}
 	// try to recompute the state
 	reexec := defaultTraceReexec
-	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
+	defer release();
 	vmctx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	// Execute the trace
 	var signer = types.MakeSigner(api.backend.ChainConfig(), block.Number());
@@ -942,10 +943,11 @@ func (api *API) TraceVictimArbTransactions(ctx context.Context, victimTx hexutil
 	}
 	// try to recompute the state
 	reexec := defaultTraceReexec
-	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
+	defer release();
 	vmctx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	// Execute the trace
 	var signer = types.MakeSigner(api.backend.ChainConfig(), block.Number());
@@ -1054,10 +1056,11 @@ func (api *API) TraceVictimArbTransactionsRetdata(ctx context.Context, victimTx 
 	}
 	// try to recompute the state
 	reexec := defaultTraceReexec
-	statedb, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
+	statedb, release, err := api.backend.StateAtBlock(ctx, block, reexec, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
+	defer release();
 	vmctx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), nil)
 	// Execute the trace
 	var signer = types.MakeSigner(api.backend.ChainConfig(), block.Number());
